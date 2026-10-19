@@ -22,14 +22,14 @@ from tkinter import filedialog, messagebox, ttk, font
 
 from PIL import Image, ImageOps
 import pymupdf
-import pypandoc
+from engines import find_pandoc
 import pillow_heif
 from tkinterdnd2 import TkinterDnD, DND_FILES
 from tables import FORMATS as TABLES, convert_table
 
 pillow_heif.register_heif_opener()
 
-PANDOC = pypandoc.get_pandoc_path()
+PANDOC = find_pandoc()
 
 
 @dataclass(frozen=True)
@@ -65,9 +65,9 @@ def targets(source: Path) -> list[str]:
         result |= VIDEO | AUDIO | {'gif'}
     if ext in TABLES:
         result |= TABLES
-    if ext in TEXT:
+    if ext in TEXT and ext not in DOCS:
         result.add('txt')
-    if ext in DOCS or ext == 'txt':
+    if PANDOC and (ext in DOCS or ext == 'txt'):
         result |= DOC_OUT
     if ext in {'srt', 'vtt', 'ass', 'ssa'} and shutil.which('ffmpeg'):
         result |= {'srt', 'vtt', 'ass', 'ssa', 'txt'}
@@ -188,6 +188,8 @@ def convert(source: Path, target: str, output_dir: Path, options: Options = Opti
         elif ext in TABLES:
             convert_table(source, dest)
         elif ext in DOCS or ext == 'txt':
+            if not PANDOC:
+                raise ValueError('Document conversion needs a compatible local Pandoc installation.')
             # Pandoc's sandbox denies network and filesystem access outside input files.
             input_format = {'md': 'markdown', 'txt': 'markdown', 'tex': 'latex'}.get(ext, ext)
             output_format = {'md': 'markdown', 'txt': 'plain', 'tex': 'latex'}.get(target, target)
@@ -351,8 +353,8 @@ class App:
         self.status = tk.StringVar(value='Add files to see compatible output formats.')
         ttk.Label(panel, textvariable=self.status, wraplength=720).pack(anchor='w', pady=8)
         engines = ', '.join(f'{name}: {"available" if shutil.which(name) else "not installed"}'
-                            for name in ('ffmpeg',)) + ' · Pandoc: bundled' + ('' if getattr(root, 'dnd_ready', False) else ' · Use Add files if drag/drop is unavailable')
-        ttk.Label(panel, text=engines, foreground='#58677e').pack(anchor='w')
+                            for name in ('ffmpeg',)) + (' · Pandoc: available' if PANDOC else ' · Pandoc unavailable: install native Pandoc for documents') + ('' if getattr(root, 'dnd_ready', False) else ' · Use Add files if drag/drop is unavailable')
+        ttk.Label(panel, text=engines, foreground='#58677e', wraplength=720).pack(anchor='w')
         self.busy = False
         root.protocol('WM_DELETE_WINDOW', self.close)
         root.after(100, self.poll)

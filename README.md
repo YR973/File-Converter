@@ -6,7 +6,7 @@ Inspired by the conversion workflow on [Tangerine](https://tangerineformac.com).
 
 ## Install and run
 
-Use Python **3.10–3.13** with Tk support. Initial package installation needs internet access; conversion works offline after installation. Pandoc is bundled in the Python dependencies. Install FFmpeg separately for audio, video, and subtitles.
+Use Python **3.10–3.13** with Tk support. Initial package installation needs internet access; conversion works offline after installation. Pandoc is bundled in the Python dependencies when a compatible binary is available. The window still opens without it; document conversions require a working local Pandoc. Install FFmpeg separately for audio, video, and subtitles.
 
 **macOS / Linux**
 
@@ -15,6 +15,16 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python converter.py
 ```
+
+If macOS reports **Bad CPU type in executable** for bundled Pandoc, install a native build:
+
+```sh
+brew install pandoc
+```
+
+Restart the application after installation. It detects `/opt/homebrew/bin/pandoc` and `/usr/local/bin/pandoc`, including when PyCharm does not inherit your shell PATH. You can also set `PYPANDOC_PANDOC` in PyCharm's run configuration to the full path of a compatible Pandoc executable. No Rosetta installation is required by the application. Without compatible Pandoc, image, PDF, spreadsheet, compression, and available media conversions remain usable.
+
+Python 3.14 has not been validated; Python 3.12 or 3.13 is recommended if you encounter other dependency issues. This particular error indicates an executable CPU architecture mismatch, rather than a Python syntax problem.
 
 On macOS, the python.org Python installer includes Tk; Homebrew users need the matching `python-tk` package. Install FFmpeg with `brew install ffmpeg` if using Homebrew.
 
