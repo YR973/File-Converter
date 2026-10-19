@@ -4,9 +4,22 @@ A Python desktop window for macOS, Windows, and Linux. Drop files or folders int
 
 Inspired by the conversion workflow on [Tangerine](https://tangerineformac.com). This is an independent application with its own window UI, not an exhaustive reproduction of Tangerine.
 
+![Local File Converter workspace with an image preview](docs/workspace.png)
+
+## The desktop experience
+
+The CustomTkinter window has a file queue, a preview workspace, and a contextual conversion panel. Start with a clean drop zone; tools and actions appear when they apply. Choose System, Light, or Dark appearance from the header.
+
+- Preview images, navigate PDF pages, read documents and text, inspect CSV/XLSX rows and ZIP/TAR contents, or see video thumbnails and audio waveforms. **Open original** uses your default app for playback and full viewing.
+- Previews load in background workers, stay in memory, and show the **original file**. They are not a simulation of crop, resize, or other pending conversion settings. Unsupported or unreadable formats show an explanation instead.
+- Image quality appears for lossy image formats; crop/resize/rotate, media trimming, and PDF DPI appear only for matching conversions. **Customize conversion** keeps advanced fields collapsed until needed. Settings hidden because they do not apply are ignored.
+- PDF merge appears for compatible image/PDF batches. Stop controls appear during conversion; output access and retry controls appear after results.
+- Each queue card shows progress or its result. Failures have expandable inline details. **Retry unfinished files** only processes failed or skipped entries, preserving successful results.
+- Large text previews are shortened; structured previews are capped at 20 MB. Image/PDF thumbnails are downsampled, audio waveforms cover the first 30 seconds, and media preview decoding has a 10-second timeout. Files are never uploaded for previews.
+
 ## Install and run
 
-Use Python **3.10–3.13** with Tk support. Initial package installation needs internet access; conversion works offline after installation. Pandoc is bundled in the Python dependencies when a compatible binary is available. The window still opens without it; document conversions require a working local Pandoc. Install FFmpeg separately for audio, video, and subtitles.
+Use Python **3.10–3.13** with Tk support. After pulling an update, rerun `python -m pip install -r requirements.txt` using the same virtual environment as PyCharm; the redesigned window requires CustomTkinter. Initial package installation needs internet access; conversion works offline after installation. Pandoc is bundled in the Python dependencies when a compatible binary is available. The window still opens without it; document conversions require a working local Pandoc. Install FFmpeg separately for audio, video, and subtitles.
 
 **macOS / Linux**
 
@@ -60,14 +73,14 @@ Only compatible destinations appear for the selected queue. A mixed queue shows 
 ## Tools and workflow
 
 - Add multiple files, add a folder's immediate files, or drag files/folders into the window.
-- Remove selected queue items; Delete removes and Ctrl+C copies their paths. Ctrl+O opens the file picker.
+- Remove an individual queue card with its × button, or press Delete for the selected file. **Copy path** copies its path. Ctrl+O (Command+O on macOS) opens the file picker.
 - Set image quality and a maximum pixel dimension; aspect ratio is preserved. ICO output is padded to a square.
-- Open **Tools** for image crop (`x,y,width,height`), clockwise rotation, audio/video start/end seconds, and PDF export DPI (72–600).
+- Expand **Customize conversion** for image crop (`x,y,width,height`), clockwise rotation, audio/video start/end seconds, and PDF export DPI (72–600).
 - Crop runs before rotation and resize. Image settings only affect image inputs; PDF DPI affects PDF page rasterization.
-- Choose **pdf-pages** to split a PDF; choose **pdf** to optimize its internal streams. Optimization does not guarantee a smaller file.
-- **Combine as PDF** merges selected PDFs and images in queue order into `combined.pdf`.
+- Choose **PDF · split pages** to split a PDF; choose **PDF** to optimize its internal streams. Optimization does not guarantee a smaller file.
+- **Combine as PDF** merges the queued PDFs and images in queue order into `combined.pdf`.
 - Conversions run in a worker thread. The window remains responsive; **Stop after current file** stops before the next queued file. An external-engine operation has a five-minute timeout. Combine as PDF is one operation.
-- **Show output** opens the destination in your system file manager.
+- **Open output folder** opens the destination in your system file manager.
 - Existing files are never overwritten, including source files. Choose a new destination or remove/rename an old output before repeating a conversion.
 - Temporary conversion files are removed on success or failure. Each file's outputs roll back together if publication encounters a filename collision. Earlier successful queue entries remain.
 
@@ -90,7 +103,7 @@ macOS-specific actions such as AirDrop, Finder drag interception, a global keybo
 .venv/bin/python -m pip check
 ```
 
-On Windows, substitute `.venv\Scripts\python.exe`. The tests create real files and validate conversions, media decoding and duration, image dimensions, PDF content and pages, spreadsheet roundtrips, existing-file protection, and rollback. Desktop tests exercise drag/drop parsing, queue editing, validation, and background conversion. GUI tests are skipped without a display; media tests are skipped without FFmpeg.
+On Windows, substitute `.venv\Scripts\python.exe`. The tests create real files and validate conversions, media decoding and duration, image dimensions, PDF content and pages, spreadsheet roundtrips, existing-file protection, and rollback. The 46-test suite includes desktop checks for progressive controls, image/PDF previews, stale-preview handling, light/dark appearance, compact window layout, queue editing, background conversion, inline errors, retry, and safe stopping. GUI tests are skipped without a display; media tests are skipped without FFmpeg.
 
 For this headless cloud environment, the installed Xorg dummy driver supplies a local test display:
 

@@ -12,13 +12,11 @@ import tarfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-import queue
 import shutil
 import subprocess
 import tempfile
-import threading
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk, font
+from tkinter import messagebox, font
 
 from PIL import Image, ImageOps
 import pymupdf
@@ -268,269 +266,31 @@ def merge_pdf(sources: tuple[Path, ...], output_dir: Path) -> list[Path]:
     return [result]
 
 
-class App:
-    def __init__(self, root: tk.Tk):
-        self.root = root
-        self.files: list[Path] = []
-        self.events = queue.Queue()
-        self.stop = threading.Event()
-        families = set(font.families(root))
-        self.family = next((name for name in ('Segoe UI', 'SF Pro Text', 'Helvetica', 'helvetica', 'DejaVu Sans')
-                            if name in families), 'sans-serif')
-        font.nametofont('TkDefaultFont').configure(family=self.family, size=10)
-        root.title('Local - File Converter')
-        root.geometry('820x640')
-        root.minsize(680, 540)
-        root.configure(bg='#f4f6fa')
-        style = ttk.Style(root)
-        if 'clam' in style.theme_names():
-            style.theme_use('clam')
-        style.configure('TFrame', background='#f4f6fa')
-        style.configure('TLabel', background='#f4f6fa', font=(self.family, 11))
-        style.configure('TButton', padding=(14, 9), font=(self.family, 10))
-        style.configure('Accent.TButton', background='#2563eb', foreground='white')
-        style.map('Accent.TButton', background=[('active', '#1d4ed8'), ('disabled', '#b7c4d8')])
-        style.configure('Title.TLabel', font=(self.family, 26, 'bold'), foreground='#182338')
-        panel = ttk.Frame(root, padding=28)
-        panel.pack(fill='both', expand=True)
-        ttk.Label(panel, text='Make your files work for you.', style='Title.TLabel').pack(anchor='w')
-        ttk.Label(panel, text='Convert on your device. Your files stay here.').pack(anchor='w', pady=(6, 18))
-        toolbar = ttk.Frame(panel)
-        toolbar.pack(fill='x')
-        self.add = ttk.Button(toolbar, text='+  Add files', command=self.choose)
-        self.add.pack(side='left')
-        self.clear = ttk.Button(toolbar, text='Clear queue', command=self.reset)
-        self.clear.pack(side='left', padx=8)
-        self.add_folder = ttk.Button(toolbar, text='Add folder', command=self.choose_batch_folder)
-        self.add_folder.pack(side='left')
-        self.tool_values = {key: tk.StringVar(value=value) for key, value in
-                            {'rotation': '0', 'crop': '', 'trim_start': '0', 'trim_end': '0', 'pdf_dpi': '150'}.items()}
-        self.tools = ttk.Button(toolbar, text='Tools...', command=self.edit_tools)
-        self.tools.pack(side='left', padx=8)
-        self.remove = ttk.Button(toolbar, text='Remove selected', command=self.remove_selected)
-        self.remove.pack(side='left')
-        self.listbox = tk.Listbox(panel, height=8, relief='flat', bg='white', fg='#27364c',
-                                  font=(self.family, 11), selectbackground='#dbeafe')
-        self.listbox.pack(fill='both', expand=True, pady=14)
-        self.listbox.bind('<Delete>', lambda event: self.remove_selected() if not self.busy else None)
-        self.listbox.bind('<Control-c>', lambda event: self.copy_paths())
-        root.bind('<Control-o>', lambda event: self.choose() if not self.busy else None)
-        if getattr(root, 'dnd_ready', hasattr(root, 'TkdndVersion')):
-            self.listbox.drop_target_register(DND_FILES)
-            self.listbox.dnd_bind('<<Drop>>', self.drop_files)
-        options = ttk.Frame(panel)
-        options.pack(fill='x')
-        ttk.Label(options, text='Convert to').pack(side='left')
-        self.format = ttk.Combobox(options, state='readonly', width=12)
-        self.format.pack(side='left', padx=12)
-        self.quality = tk.StringVar(value='90')
-        self.size = tk.StringVar(value='0')
-        ttk.Label(options, text='Image quality').pack(side='left')
-        self.quality_entry = ttk.Spinbox(options, from_=1, to=100, width=4, textvariable=self.quality)
-        self.quality_entry.pack(side='left', padx=8)
-        ttk.Label(options, text='Max pixels (0 = original)').pack(side='left')
-        self.size_entry = ttk.Entry(options, textvariable=self.size, width=6)
-        self.size_entry.pack(side='left', padx=8)
-        self.folder = tk.StringVar(value=str(Path.home() / 'Converted Files'))
-        ttk.Label(panel, text='Save files to').pack(anchor='w', pady=(16, 5))
-        row = ttk.Frame(panel)
-        row.pack(fill='x')
-        self.entry = ttk.Entry(row, textvariable=self.folder)
-        self.entry.pack(side='left', fill='x', expand=True)
-        self.browse = ttk.Button(row, text='Browse...', command=self.choose_folder)
-        self.browse.pack(side='left', padx=(8, 0))
-        actions = ttk.Frame(panel)
-        actions.pack(fill='x', pady=(18, 10))
-        self.go = ttk.Button(actions, text='Convert files', style='Accent.TButton', command=self.start)
-        self.go.pack(side='left')
-        self.merge = ttk.Button(actions, text='Combine as PDF', command=lambda: self.start(merge=True))
-        self.merge.pack(side='left', padx=8)
-        self.cancel = ttk.Button(actions, text='Stop after current file', command=self.stop.set, state='disabled')
-        self.cancel.pack(side='left', padx=8)
-        ttk.Button(actions, text='Show output', command=self.show_output).pack(side='right')
-        self.progress = ttk.Progressbar(panel, mode='determinate')
-        self.progress.pack(fill='x')
-        self.status = tk.StringVar(value='Add files to see compatible output formats.')
-        ttk.Label(panel, textvariable=self.status, wraplength=720).pack(anchor='w', pady=8)
-        engines = ', '.join(f'{name}: {"available" if shutil.which(name) else "not installed"}'
-                            for name in ('ffmpeg',)) + (' · Pandoc: available' if PANDOC else ' · Pandoc unavailable: install native Pandoc for documents') + ('' if getattr(root, 'dnd_ready', False) else ' · Use Add files if drag/drop is unavailable')
-        ttk.Label(panel, text=engines, foreground='#58677e', wraplength=720).pack(anchor='w')
-        self.busy = False
-        root.protocol('WM_DELETE_WINDOW', self.close)
-        root.after(100, self.poll)
+from desktop import DesktopApp
 
-    def remove_selected(self):
-        for index in reversed(self.listbox.curselection()):
-            self.files.pop(index)
-            self.listbox.delete(index)
-        self.add_paths(())
 
-    def copy_paths(self):
-        paths = [str(self.files[index]) for index in self.listbox.curselection()]
-        if paths:
-            self.root.clipboard_clear()
-            self.root.clipboard_append('\n'.join(paths))
-
-    def show_output(self):
-        folder = Path(self.folder.get()).expanduser().resolve()
-        if not folder.is_dir():
-            messagebox.showinfo('Output folder', 'The output folder will be created when you convert.')
-            return
-        try:
-            if sys.platform == 'win32':
-                os.startfile(folder)
-            else:
-                subprocess.Popen(['open' if sys.platform == 'darwin' else 'xdg-open', str(folder)],
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except OSError as exc:
-            messagebox.showerror('Could not open folder', str(exc))
-
-    def edit_tools(self):
-        dialog = tk.Toplevel(self.root)
-        dialog.title('Conversion tools')
-        dialog.transient(self.root)
-        dialog.grab_set()
-        frame = ttk.Frame(dialog, padding=20)
-        frame.pack(fill='both', expand=True)
-        labels = {'rotation': 'Rotate image clockwise (0/90/180/270)',
-                  'crop': 'Crop image: x,y,width,height (blank = full image)',
-                  'trim_start': 'Audio/video start in seconds (0 = beginning)',
-                  'trim_end': 'Audio/video end in seconds (0 = end)',
-                  'pdf_dpi': 'PDF image export DPI (72–600)'}
-        for index, (key, label) in enumerate(labels.items()):
-            ttk.Label(frame, text=label).grid(row=index, column=0, sticky='w', padx=8, pady=8)
-            ttk.Entry(frame, textvariable=self.tool_values[key], width=18).grid(row=index, column=1)
-        ttk.Label(frame, text='Settings apply to matching file types only. Crop precedes rotation and resize.').grid(
-            row=5, column=0, columnspan=2, pady=12)
-        ttk.Button(frame, text='Done', command=dialog.destroy).grid(row=6, column=1, sticky='e')
-
-    def drop_files(self, event):
-        if not self.busy:
-            paths = [Path(path) for path in self.root.tk.splitlist(event.data)]
-            files = []
-            for path in paths:
-                if path.is_dir():
-                    files.extend(str(item) for item in sorted(path.iterdir()) if item.is_file())
-                elif path.is_file():
-                    files.append(str(path))
-            self.add_paths(files)
-
-    def choose(self):
-        self.add_paths(filedialog.askopenfilenames(title='Select files to convert'))
-
-    def choose_batch_folder(self):
-        folder = filedialog.askdirectory(title='Add files in folder (not recursive)')
-        if folder:
-            self.add_paths(str(path) for path in sorted(Path(folder).iterdir()) if path.is_file())
-
-    def add_paths(self, names):
-        for name in names:
-            path = Path(name)
-            if path not in self.files:
-                self.files.append(path)
-                self.listbox.insert('end', f'{path.name}   ·   {path.parent}')
-        common = set.intersection(*(set(targets(path)) for path in self.files)) if self.files else set()
-        self.format['values'] = sorted(common)
-        preferred = ['png', 'mp4', 'mp3', 'docx', 'xlsx', 'txt', 'zip']
-        self.format.set(next((fmt for fmt in preferred if fmt in common), sorted(common)[0] if common else ''))
-        self.status.set(f'{len(self.files)} file(s) selected.' if common else
-                        'No shared output format. Clear the queue and select supported files of a similar type.')
-
-    def reset(self):
-        self.files.clear()
-        self.listbox.delete(0, 'end')
-        self.format.set('')
-        self.format['values'] = []
-        self.status.set('Add files to begin.')
-
-    def choose_folder(self):
-        folder = filedialog.askdirectory()
-        if folder:
-            self.folder.set(folder)
-
-    def start(self, merge=False):
-        if self.busy or not self.files or (not merge and not self.format.get()) or not self.folder.get().strip():
-            messagebox.showinfo('Choose files and format', 'Select supported files, an output format, and a destination.')
-            return
-        try:
-            values = {key: var.get().strip() for key, var in self.tool_values.items()}
-            crop = tuple(int(value.strip()) for value in values['crop'].split(',')) if values['crop'] else None
-            if crop is not None and len(crop) != 4:
-                raise ValueError
-            options = Options(int(self.quality.get()), int(self.size.get()), int(values['rotation']), crop,
-                              float(values['trim_start']), float(values['trim_end']), int(values['pdf_dpi']))
-            if not 1 <= options.quality <= 100 or not 0 <= options.max_size <= 16384:
-                raise ValueError
-        except ValueError:
-            messagebox.showerror('Invalid settings', 'Check quality (1–100), size (0–16384), and numeric values in Tools.')
-            return
-        self.busy = True
-        self.stop.clear()
-        self.progress.configure(maximum=len(self.files), value=0)
-        for widget in (self.add, self.add_folder, self.tools, self.remove, self.clear, self.go, self.merge, self.browse, self.entry, self.format, self.quality_entry, self.size_entry):
-            widget.configure(state='disabled')
-        self.cancel.configure(state='normal')
-        threading.Thread(target=self.worker, args=(tuple(self.files), '__merge__' if merge else self.format.get(), Path(self.folder.get()), options),
-                         daemon=True).start()
-
-    def worker(self, files, target, folder, options):
-        if target == '__merge__':
-            self.events.put(('status', 'Combining files as PDF...'))
-            try:
-                merge_pdf(files, folder)
-                self.events.put(('progress', len(files)))
-                self.events.put(('done', (len(files), 0, 0, [])))
-            except Exception as exc:
-                self.events.put(('done', (0, len(files), 0, [str(exc)])))
-            return
-        succeeded = failed = 0
-        errors = []
-        for index, source in enumerate(files):
-            if self.stop.is_set():
-                break
-            self.events.put(('status', f'Converting {source.name}…'))
-            try:
-                convert(source, target, folder, options)
-                succeeded += 1
-            except Exception as exc:
-                failed += 1
-                errors.append(f'{source.name}: {exc}')
-            self.events.put(('progress', index + 1))
-        self.events.put(('done', (succeeded, failed, len(files) - succeeded - failed, errors)))
-
-    def poll(self):
-        try:
-            while True:
-                kind, value = self.events.get_nowait()
-                if kind == 'status':
-                    self.status.set(value)
-                elif kind == 'progress':
-                    self.progress['value'] = value
-                else:
-                    good, bad, skipped, errors = value
-                    self.status.set(f'{good} converted · {bad} failed · {skipped} skipped. Existing files are never replaced.')
-                    self.busy = False
-                    for widget in (self.add, self.add_folder, self.tools, self.remove, self.clear, self.go, self.merge, self.browse, self.entry, self.quality_entry, self.size_entry):
-                        widget.configure(state='normal')
-                    self.format.configure(state='readonly')
-                    self.cancel.configure(state='disabled')
-                    if errors:
-                        messagebox.showwarning('Some files could not be converted', '\n\n'.join(errors)[:8000])
-        except queue.Empty:
-            pass
-        self.root.after(100, self.poll)
-
-    def close(self):
-        if self.busy:
-            messagebox.showinfo('Conversion running', 'Stop after the current file, then close the app.')
-        else:
-            self.root.destroy()
+class App(DesktopApp):
+    def __init__(self, root):
+        super().__init__(root, sys.modules[__name__])
 
 
 def create_window():
-    window = tk.Tk()
+    import customtkinter as ctk
+    ctk.set_appearance_mode('System')
+    class DropWindow(ctk.CTk, TkinterDnD.DnDWrapper):
+        def destroy(self):
+            # CustomTkinter schedules theme/scrollbar callbacks. Cancel this
+            # interpreter's timers before widgets disappear, including in tests.
+            for callback in self.tk.splitlist(self.tk.call('after', 'info')):
+                self.tk.call("after", "cancel", callback)
+            super().destroy()
+    window = DropWindow()
+    if sys.platform.startswith('linux'):
+        families = set(font.families(window))
+        if 'Roboto' not in families:
+            ctk.ThemeManager.theme['CTkFont']['family'] = next((name for name in ('Helvetica', 'helvetica', 'DejaVu Sans') if name in families), 'sans-serif')
     try:
-        window.TkdndVersion = TkinterDnD._require(window)
+        window.TkdndVersion = TkinterDnD.require(window)
         window.dnd_ready = True
     except (RuntimeError, tk.TclError):
         window.dnd_ready = False
